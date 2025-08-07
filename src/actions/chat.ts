@@ -22,4 +22,3 @@ export async function sendChatMessage(message: string, senderId: string, matchId
   
   return { success: true };
 }
-    
