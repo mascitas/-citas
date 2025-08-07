@@ -103,8 +103,7 @@ const loadState = (): AppState => {
     }
     const serializedState = localStorage.getItem('appState');
     if (serializedState === null) {
-      const initialState = getInitialState();
-      return initialState;
+      return getInitialState();
     }
     const storedState = JSON.parse(serializedState);
     
@@ -113,8 +112,8 @@ const loadState = (): AppState => {
         ...getInitialState(),
         ...storedState,       
         isLoading: false, // Don't start in loading state when loading from storage
-        user: null,      // User is never persisted
-        profile: null,   // Profile is never persisted
+        user: storedState.user || null, // Restore user if it exists
+        profile: storedState.profile || null, // Restore profile if it exists
         profiles: (storedState.profiles || getInitialState().profiles).map((p: UserProfile) => ({ ...p, dob: new Date(p.dob), photos: p.photos || [p.photoUrl], referralCount: p.referralCount ?? 0 })),
         requests: (storedState.requests || []).map((r: MatchRequest) => ({ 
             ...r, 
@@ -146,14 +145,11 @@ const saveState = (state: AppState) => {
   try {
      const stateToSave = {
       ...state,
-      isLoading: true, // Persist with loading true to avoid flashes
-      user: null, 
-      profile: null,
+      isLoading: false, 
     };
     const serializedState = JSON.stringify(stateToSave);
     localStorage.setItem('appState', serializedState);
-  } catch (err)
- {
+  } catch (err) {
     console.error("Could not save state to localStorage", err);
   }
 };
@@ -210,6 +206,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'INITIALIZE_STATE':
         return { ...action.payload, isLoading: false };
+
     case 'SET_LOADING':
       return { ...state, isLoading: action.payload };
     
@@ -226,7 +223,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
       
     case 'LOGIN': {
         const { email } = action.payload;
-        const fullState = loadState(); // Load the entire persisted state, including pending notifications
+        const fullState = loadState(); 
         const existingProfile = fullState.profiles.find(p => p.email === email);
         
         if (existingProfile) {
@@ -236,7 +233,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
               email: existingProfile.email,
             };
             setTimeout(() => action.onSuccess(), 0); 
-            // Return the full state, but with the current user set
+
             const loggedInState = {
               ...fullState,
               user: mockUser as any,
@@ -281,14 +278,12 @@ function reducerLogic(state: AppState, action: Action): AppState {
     }
 
     case 'LOGOUT': {
-      // On logout, we only clear the active user and profile, preserving the rest of the state
+      if (typeof window !== "undefined") {
+          localStorage.removeItem('appState');
+      }
       return {
-        ...state,
-        user: null,
-        profile: null,
-        tokens: 0,
+        ...getInitialState(),
         isLoading: false,
-        hasUnreadMessages: false,
       };
     }
       
@@ -333,7 +328,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
         tokens: updatedFromProfile.tokens,
         profiles: newProfiles,
         requests: [...state.requests, newRequest],
-        newReceivedRequestId: newRequest.id, // Set the flag for the receiver
+        newReceivedRequestId: newRequest.id, 
       };
     }
 
@@ -352,7 +347,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
           const paymentExpires = new Date();
           paymentExpires.setHours(paymentExpires.getHours() + 48);
           updatedRequests = state.requests.map(r => r.id === requestId ? { ...r, status, paymentExpiresAt: paymentExpires } : r);
-          newPendingApprovalId = requestId; // Notify the original sender
+          newPendingApprovalId = requestId; 
       } else {
          updatedRequests = state.requests.map(r => r.id === requestId ? { ...r, status } : r);
       }
@@ -369,7 +364,6 @@ function reducerLogic(state: AppState, action: Action): AppState {
         }
         newMatches = [...state.matches.filter(m => m.id !== newMatch.id), newMatch];
         newChats = { ...newChats, [newMatch.id]: [] };
-        // Set the redirect ID for the user who is currently performing the action
         newRedirectId = newMatch.id;
       }
 
@@ -393,7 +387,6 @@ function reducerLogic(state: AppState, action: Action): AppState {
         };
 
         const addMessageState = { ...state, chats: newChats };
-        // We only set the unread flag if the current profile is NOT the sender
         const hasUnread = message.senderId !== state.profile?.id;
         
         return { ...addMessageState, hasUnreadMessages: hasUnread };
@@ -423,7 +416,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
 
         if (currentCount >= REFERRAL_GOAL) {
             currentTokens++;
-            currentCount = 0; // Reset counter
+            currentCount = 0; 
         }
 
         const updatedProfile = {
@@ -459,12 +452,7 @@ function reducerLogic(state: AppState, action: Action): AppState {
     case 'RESET_STATE':
         const cleanState = getInitialState();
         if (typeof window !== 'undefined') {
-            localStorage.setItem('appState', JSON.stringify({
-                ...cleanState,
-                isLoading: false, // Ensure loading is false
-                user: null,
-                profile: null,
-            }));
+            localStorage.removeItem('appState');
         }
         return { ...cleanState, isLoading: false };
 
@@ -477,25 +465,20 @@ const AppContext = createContext<{ state: AppState; dispatch: React.Dispatch<Act
 
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [state, dispatch] = useReducer(appReducer, getInitialState());
-  const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    // This effect runs only on the client-side, after the component has mounted.
     if (typeof window !== 'undefined') {
       try {
         const persistedState = loadState();
         dispatch({ type: 'INITIALIZE_STATE', payload: persistedState });
       } catch (error) {
         console.error("Failed to load persisted state:", error);
-        // Fallback to initial state if loading fails
         dispatch({ type: 'INITIALIZE_STATE', payload: getInitialState() });
-      } finally {
-        setIsInitialized(true);
       }
     }
-  }, []); // The empty dependency array ensures this runs only once on mount
+  }, []);
 
-  if (!isInitialized) {
+  if (state.isLoading) {
      return (
           <div className="flex h-screen w-full items-center justify-center bg-background">
             <div className="flex flex-col items-center gap-4">
@@ -520,4 +503,4 @@ export const useAppContext = () => {
   }
   return context;
 };
-    
+
