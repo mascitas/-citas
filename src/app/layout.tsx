@@ -1,32 +1,103 @@
-import type { Metadata } from 'next';
-import './globals.css';
-import { Providers } from '@/context/Providers';
-import { Toaster } from '@/components/ui/toaster';
+
+"use client";
+
+import React, { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import MainLayout from '@/components/shared/MainLayout';
+import WelcomeLayout from '@/components/shared/WelcomeLayout';
+import { useAppContext } from '@/context/AppContext';
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+    const { state, dispatch } = useAppContext();
+    const router = useRouter();
+    const pathname = usePathname();
+
+    useEffect(() => {
+        // Wait until loading is false before doing any checks
+        if (state.isLoading) {
+            return;
+        }
+
+        // If loading is finished and there's no user, redirect to login page.
+        if (!state.user) {
+            router.replace('/');
+            return;
+        }
+        
+        // If the user is logged in, but has no profile, redirect to create one
+        // unless they are already on that page.
+        if(state.user && !state.profile && pathname !== '/create-profile') {
+            router.replace('/create-profile');
+            return;
+        }
+
+        // On app load, check if there's a match to redirect to for celebration
+        if (state.redirectMatchId) {
+            const match = state.matches.find(m => m.id === state.redirectMatchId);
+            if (match) {
+                router.replace(`/celebration/${state.redirectMatchId}`);
+                dispatch({ type: 'CLEAR_REDIRECT_MATCH' });
+            }
+        }
+
+        // On app load, check if there's a request waiting for final approval to show celebration
+        if (state.pendingApprovalMatchId && state.profile) {
+            const request = state.requests.find(r => r.id === state.pendingApprovalMatchId);
+            // Check if the current user is the one who needs to approve
+            if (request && request.from.id === state.profile.id && request.status === 'awaiting_final_approval') {
+                router.replace(`/match-success/${request.id}`);
+                dispatch({ type: 'CLEAR_PENDING_APPROVAL_MATCH' });
+            }
+        }
+
+        // On app load, check if there's a new pending request to show "almost match" celebration
+        if (state.newReceivedRequestId && state.profile) {
+            const request = state.requests.find(r => r.id === state.newReceivedRequestId);
+            if (request && request.to.id === state.profile.id && request.status === 'pending') {
+                router.replace(`/match-success/${request.id}?initial=true`);
+                dispatch({ type: 'CLEAR_NEW_RECEIVED_REQUEST' });
+            }
+        }
+
+        // On app load, check for unread messages and redirect if necessary
+        const isNotificationPage = pathname.startsWith('/chat') || pathname.startsWith('/new-message') || pathname.startsWith('/celebration');
+        if (state.hasUnreadMessages && !isNotificationPage) {
+          router.replace('/new-message');
+        }
+    }, [state, router, pathname, dispatch]);
 
 
-export const metadata: Metadata = {
-  title: '+citas',
-  description: '¡Encuentra tu cita ideal!',
-};
+    // While loading, show a loading spinner.
+    if (state.isLoading) {
+         return (
+          <div className="flex h-screen w-full items-center justify-center bg-background">
+            <div className="flex flex-col items-center gap-4">
+                <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-primary"></div>
+                <p className="text-muted-foreground">Cargando tu experiencia...</p>
+            </div>
+          </div>
+        );
+    }
+    
+    // Welcome and CreateProfile use a simpler layout
+    const simpleLayouts = ['/welcome', '/create-profile', '/celebration', '/match-success', '/new-message'];
+    if (simpleLayouts.some(p => pathname.startsWith(p))) {
+        return <WelcomeLayout>{children}</WelcomeLayout>;
+    }
+    
+    // If user and profile exist, show the main application layout
+    if(state.user && state.profile) {
+        return <MainLayout>{children}</MainLayout>;
+    }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html lang="es" suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet" />
-      </head>
-      <body className="font-body antialiased">
-        <Providers>
-          {children}
-          <Toaster />
-        </Providers>
-      </body>
-    </html>
-  );
+    // Fallback while redirecting or for edge cases
+    return (
+        <div className="flex h-screen w-full items-center justify-center bg-background">
+            <div className="flex flex-col items-center gap-4">
+                <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-primary"></div>
+                <p className="text-muted-foreground">Finalizando...</p>
+            </div>
+        </div>
+    );
 }
+
