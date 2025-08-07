@@ -96,53 +96,9 @@ const getInitialState = (): AppState => {
   };
 };
 
-const loadState = (): AppState => {
-  try {
-    if (typeof window === 'undefined') {
-      return getInitialState();
-    }
-    const serializedState = localStorage.getItem('appState');
-    if (serializedState === null) {
-      return getInitialState();
-    }
-    const storedState = JSON.parse(serializedState);
-    
-    // Dates are not preserved through JSON.stringify, so we need to parse them back
-    const parsedState: AppState = {
-        ...getInitialState(),
-        ...storedState,       
-        isLoading: false, // Don't start in loading state when loading from storage
-        user: storedState.user || null, // Restore user if it exists
-        profile: storedState.profile || null, // Restore profile if it exists
-        profiles: (storedState.profiles || getInitialState().profiles).map((p: UserProfile) => ({ ...p, dob: new Date(p.dob), photos: p.photos || [p.photoUrl], referralCount: p.referralCount ?? 0 })),
-        requests: (storedState.requests || []).map((r: MatchRequest) => ({ 
-            ...r, 
-            createdAt: new Date(r.createdAt),
-            paymentExpiresAt: r.paymentExpiresAt ? new Date(r.paymentExpiresAt) : undefined,
-            from: { ...r.from, dob: new Date(r.from.dob), photos: r.from.photos || [r.from.photoUrl] },
-            to: { ...r.to, dob: new Date(r.to.dob), photos: r.to.photos || [r.to.photoUrl] }
-        })),
-        matches: (storedState.matches || []).map((m: Match) => ({ 
-            ...m, 
-            createdAt: new Date(m.createdAt), 
-            chatExpiresAt: new Date(m.chatExpiresAt), 
-            status: m.status,
-            users: m.users.map(u => ({...u, dob: new Date(u.dob), photos: u.photos || [u.photoUrl] })) as [UserProfile, UserProfile]
-        })),
-        chats: Object.entries(storedState.chats || {}).reduce((acc, [key, messages]) => ({
-            ...acc,
-            [key]: (messages as Message[]).map(m => ({ ...m, timestamp: new Date(m.timestamp) }))
-        }), {}),
-    };
-    return parsedState;
-  } catch (err) {
-    console.error("Could not load state from localStorage", err);
-    return getInitialState();
-  }
-};
-
 const saveState = (state: AppState) => {
   try {
+     if (typeof window === 'undefined') return;
      const stateToSave = {
       ...state,
       isLoading: false, 
@@ -195,9 +151,7 @@ type Action =
 function appReducer(state: AppState, action: Action): AppState {
   const newState = reducerLogic(state, action);
   if (action.type !== 'INITIALIZE_STATE' && action.type !== 'SET_LOADING') {
-    if (typeof window !== 'undefined') {
-        saveState(newState);
-    }
+    saveState(newState);
   }
   return newState;
 }
@@ -223,8 +177,8 @@ function reducerLogic(state: AppState, action: Action): AppState {
       
     case 'LOGIN': {
         const { email } = action.payload;
-        const fullState = loadState(); 
-        const existingProfile = fullState.profiles.find(p => p.email === email);
+        
+        const existingProfile = state.profiles.find(p => p.email === email);
         
         if (existingProfile) {
             const mockUser = {
@@ -235,12 +189,14 @@ function reducerLogic(state: AppState, action: Action): AppState {
             setTimeout(() => action.onSuccess(), 0); 
 
             const loggedInState = {
-              ...fullState,
+              ...state,
               user: mockUser as any,
               profile: existingProfile,
               tokens: existingProfile.tokens,
               isLoading: false,
             };
+            // Save state after successful login
+            saveState(loggedInState); 
             return { ...loggedInState, hasUnreadMessages: getUnreadMessagesFlag(loggedInState) };
         } else {
             setTimeout(() => action.onError('Usuario no encontrado. Por favor, usa uno de los perfiles de prueba.'), 0);
@@ -467,13 +423,46 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [state, dispatch] = useReducer(appReducer, getInitialState());
 
   useEffect(() => {
+    // This effect runs only on the client side, after the initial render.
     if (typeof window !== 'undefined') {
       try {
-        const persistedState = loadState();
-        dispatch({ type: 'INITIALIZE_STATE', payload: persistedState });
+        const serializedState = localStorage.getItem('appState');
+        if (serializedState) {
+            const storedState = JSON.parse(serializedState);
+             // Dates are not preserved through JSON.stringify, so we need to parse them back
+            const parsedState: AppState = {
+                ...getInitialState(),
+                ...storedState,       
+                isLoading: false, 
+                user: storedState.user || null, 
+                profile: storedState.profile || null, 
+                profiles: (storedState.profiles || getInitialState().profiles).map((p: UserProfile) => ({ ...p, dob: new Date(p.dob), photos: p.photos || [p.photoUrl], referralCount: p.referralCount ?? 0 })),
+                requests: (storedState.requests || []).map((r: MatchRequest) => ({ 
+                    ...r, 
+                    createdAt: new Date(r.createdAt),
+                    paymentExpiresAt: r.paymentExpiresAt ? new Date(r.paymentExpiresAt) : undefined,
+                    from: { ...r.from, dob: new Date(r.from.dob), photos: r.from.photos || [r.from.photoUrl] },
+                    to: { ...r.to, dob: new Date(r.to.dob), photos: r.to.photos || [r.to.photoUrl] }
+                })),
+                matches: (storedState.matches || []).map((m: Match) => ({ 
+                    ...m, 
+                    createdAt: new Date(m.createdAt), 
+                    chatExpiresAt: new Date(m.chatExpiresAt), 
+                    status: m.status,
+                    users: m.users.map(u => ({...u, dob: new Date(u.dob), photos: u.photos || [u.photoUrl] })) as [UserProfile, UserProfile]
+                })),
+                chats: Object.entries(storedState.chats || {}).reduce((acc, [key, messages]) => ({
+                    ...acc,
+                    [key]: (messages as Message[]).map(m => ({ ...m, timestamp: new Date(m.timestamp) }))
+                }), {}),
+            };
+            dispatch({ type: 'INITIALIZE_STATE', payload: parsedState });
+        } else {
+             dispatch({ type: 'SET_LOADING', payload: false });
+        }
       } catch (error) {
         console.error("Failed to load persisted state:", error);
-        dispatch({ type: 'INITIALIZE_STATE', payload: getInitialState() });
+        dispatch({ type: 'SET_LOADING', payload: false });
       }
     }
   }, []);
